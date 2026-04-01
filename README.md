@@ -56,7 +56,7 @@ flowchart TD
 
     G -->|nuclei| I[Preprocess tile]
     I --> I1[Drop alpha if present]
-    I1 --> I2[Skip mostly white tile if >95 percent white]
+    I1 --> I2[Check tile overlap with global tissue mask]
     I2 --> I3[Reinhard normalization<br/>using reference tile]
     I3 --> I4[Color deconvolution]
     I4 --> I5[Take hematoxylin channel]
@@ -129,6 +129,7 @@ What happens:
 This shared iterator is the core optimization:
 - the slide is traversed once
 - stain and nuclei are both computed from the same tile buffer
+- tile inclusion is decided from a global tissue mask built on the thumbnail
 
 ### 4. Stain Branch
 
@@ -163,8 +164,8 @@ Input:
 
 What is calculated per tile:
 - remove alpha channel if present
-- estimate how white the tile is
-- skip the tile if it is mostly background
+- check overlap with a global tissue mask built from the thumbnail
+- skip only tiles with almost no tissue-mask overlap
 - apply Reinhard color normalization
   - this normalizes tile color distribution to match a reference tile
   - goal: reduce stain/color variation across slides
@@ -215,6 +216,7 @@ These help answer:
 - is the pipeline CPU-bound?
 - is it mostly waiting on slide I/O?
 - are multiple workers actually being used effectively?
+- how many tiles were skipped by the tissue mask
 
 ## Environment
 

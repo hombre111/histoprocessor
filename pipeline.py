@@ -78,11 +78,59 @@ def maybe_strip_alpha(tile_np: np.ndarray) -> np.ndarray:
     return tile_np
 
 
-def mostly_white_fraction(tile_np: np.ndarray) -> float:
-    tile_rgb = maybe_strip_alpha(tile_np)
-    if tile_rgb.ndim != 3 or tile_rgb.shape[-1] < 3:
-        return 1.0
-    return float(np.mean((tile_rgb > 240).all(axis=-1)))
+def build_thumbnail_tissue_mask(
+    slide_path: Path,
+    *,
+    gamma: float = 0.5,
+    clahe_clip: float = 12.0,
+    clahe_grid: int = 4,
+    dilate_kernel: int = 3,
+) -> tuple[np.ndarray, tuple[int, int]]:
+    slide = openslide.OpenSlide(str(slide_path))
+    thumb = np.array(slide.associated_images["thumbnail"])
+    img_gray = cv2.cvtColor(thumb, cv2.COLOR_RGB2GRAY)
+    gamma_corrected = apply_gamma(img_gray, gamma=gamma)
+    clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(clahe_grid, clahe_grid))
+    enhanced = clahe.apply(gamma_corrected)
+    _, mask = get_tissue_mask(255 - enhanced)
+    mask_u8 = mask.astype(np.uint8)
+    if dilate_kernel > 1:
+        kernel = np.ones((dilate_kernel, dilate_kernel), dtype=np.uint8)
+        mask_u8 = cv2.dilate(mask_u8, kernel, iterations=1)
+    return mask_u8.astype(bool), (thumb.shape[1], thumb.shape[0])
+
+
+def tile_tissue_overlap(
+    tile_info: dict[str, Any],
+    tissue_mask: np.ndarray,
+    thumb_size: tuple[int, int],
+    slide_size: tuple[int, int],
+) -> float:
+    thumb_w, thumb_h = thumb_size
+    slide_w, slide_h = slide_size
+    gx = int(tile_info.get("gx", 0) or 0)
+    gy = int(tile_info.get("gy", 0) or 0)
+    gw = int(tile_info.get("gwidth", 0) or tile_info.get("width", 0) or 0)
+    gh = int(tile_info.get("gheight", 0) or tile_info.get("height", 0) or 0)
+
+    x0 = max(0, min(thumb_w - 1, int(np.floor(gx * thumb_w / max(1, slide_w)))))
+    y0 = max(0, min(thumb_h - 1, int(np.floor(gy * thumb_h / max(1, slide_h)))))
+    x1 = max(x0 + 1, min(thumb_w, int(np.ceil((gx + gw) * thumb_w / max(1, slide_w)))))
+    y1 = max(y0 + 1, min(thumb_h, int(np.ceil((gy + gh) * thumb_h / max(1, slide_h)))))
+
+    region = tissue_mask[y0:y1, x0:x1]
+    if region.size == 0:
+        return 0.0
+    return float(region.mean())
+
+
+def make_skipped_stain_record(tile_info: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        "IntensitySumPositive": 0.0,
+        "NumberPositive": 0,
+        "NumberTotalPixels": int((tile_info.get("width") or 0) * (tile_info.get("height") or 0)),
+    }
+    return add_tile_metadata(result, tile_info)
 
 
 def add_tile_metadata(result: dict[str, Any], tile_info: dict[str, Any]) -> dict[str, Any]:
@@ -148,21 +196,18 @@ def extract_nuclei(
     stain_matrix: np.ndarray,
 ) -> dict[str, Any]:
     tile_rgb = maybe_strip_alpha(tile_np)
-    if mostly_white_fraction(tile_rgb) > 0.95:
-        nuclei_count = 0
-    else:
-        im_nmzd = htk.preprocessing.color_normalization.reinhard(tile_rgb, mean_ref, std_ref)
-        im_stains = htk.preprocessing.color_deconvolution.color_deconvolution(
-            im_nmzd,
-            stain_matrix,
-        ).Stains
-        im_nuclei_stain = im_stains[:, :, 0]
-        foreground_threshold = 140
-        im_fgnd_mask = sp.ndimage.binary_fill_holes(im_nuclei_stain < foreground_threshold)
-        nuclei_mask = morphology.remove_small_objects(im_fgnd_mask, min_size=100)
-        nuclei_mask = morphology.remove_small_holes(nuclei_mask, area_threshold=50)
-        labeled = measure.label(nuclei_mask)
-        nuclei_count = int(labeled.max())
+    im_nmzd = htk.preprocessing.color_normalization.reinhard(tile_rgb, mean_ref, std_ref)
+    im_stains = htk.preprocessing.color_deconvolution.color_deconvolution(
+        im_nmzd,
+        stain_matrix,
+    ).Stains
+    im_nuclei_stain = im_stains[:, :, 0]
+    foreground_threshold = 140
+    im_fgnd_mask = sp.ndimage.binary_fill_holes(im_nuclei_stain < foreground_threshold)
+    nuclei_mask = morphology.remove_small_objects(im_fgnd_mask, min_size=100)
+    nuclei_mask = morphology.remove_small_holes(nuclei_mask, area_threshold=50)
+    labeled = measure.label(nuclei_mask)
+    nuclei_count = int(labeled.max())
 
     return add_tile_metadata({"nuclei_count": nuclei_count}, tile_info)
 
@@ -405,6 +450,8 @@ class UnifiedSlideProcessor:
 
     def _run_tile_pipeline(self, status: SlideStatus) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
         ts = large_image.getTileSource(str(self.slide_path))
+        md = ts.getMetadata()
+        slide_size = (int(md.get("sizeX", 0)), int(md.get("sizeY", 0)))
         tile_iterator = ts.tileIterator(
             scale=dict(magnification=self.magnification),
             tile_size=self.template_params["tile_size"],
@@ -420,13 +467,21 @@ class UnifiedSlideProcessor:
         nuclei_records: list[dict[str, Any]] = []
         first_bands: int | None = None
         processed = 0
+        skipped = 0
         started_at = time.monotonic()
         total_tiles: int | None = None
+        tissue_overlap_threshold = 0.001
+        tissue_mask, thumb_size = build_thumbnail_tissue_mask(self.slide_path)
+        tissue_coverage = float(tissue_mask.mean()) if tissue_mask.size else 0.0
 
         log(
             f"Starting tile pass for {self.slide_path.name}: "
             f"stages={','.join(self.enabled_stages)} "
             f"magnification={self.magnification} tile_size={self.tile_size} workers={self.workers}"
+        )
+        log(
+            f"Thumbnail tissue mask ready: size={thumb_size[0]}x{thumb_size[1]} "
+            f"coverage={tissue_coverage*100:.2f}% overlap_threshold={tissue_overlap_threshold:.4f}"
         )
 
         with cf.ProcessPoolExecutor(
@@ -438,7 +493,21 @@ class UnifiedSlideProcessor:
             iterator = iter(tile_iterator)
             max_pending = max(1, self.workers * 2)
 
-            def submit_one(tile_info: dict[str, Any]) -> None:
+            def submit_one(tile_info: dict[str, Any]) -> bool:
+                nonlocal processed, skipped, first_bands
+                overlap = tile_tissue_overlap(tile_info, tissue_mask, thumb_size, slide_size)
+                if overlap < tissue_overlap_threshold:
+                    coord = add_tile_metadata({}, tile_info)
+                    if self.run_stain_stage:
+                        stain_records.append(make_skipped_stain_record(tile_info))
+                    if self.run_nuclei_stage:
+                        nuclei_records.append(dict(coord, nuclei_count=0))
+                    if first_bands is None:
+                        tile_np = tile_info["tile"]
+                        first_bands = int(tile_np.shape[2]) if tile_np.ndim == 3 else 1
+                    processed += 1
+                    skipped += 1
+                    return False
                 pending.add(
                     executor.submit(
                         _process_tile_worker,
@@ -447,15 +516,23 @@ class UnifiedSlideProcessor:
                         self.run_nuclei_stage,
                     )
                 )
+                return True
 
-            try:
-                first_tile = next(iterator)
-                total_tiles = first_tile.get("iterator_range", {}).get("position")
-                submit_one(first_tile)
-                for _ in range(max_pending - 1):
-                    submit_one(next(iterator))
-            except StopIteration:
-                pass
+            iterator_exhausted = False
+
+            def fill_pending() -> None:
+                nonlocal iterator_exhausted, total_tiles
+                while not iterator_exhausted and len(pending) < max_pending:
+                    try:
+                        tile_info = next(iterator)
+                        if total_tiles is None:
+                            total_tiles = tile_info.get("iterator_range", {}).get("position")
+                        submit_one(tile_info)
+                    except StopIteration:
+                        iterator_exhausted = True
+                        break
+
+            fill_pending()
 
             if total_tiles:
                 log(f"Total tiles scheduled: {total_tiles}")
@@ -466,7 +543,11 @@ class UnifiedSlideProcessor:
             if total_tiles:
                 progress_every = max(100, int(total_tiles) // 20)
 
-            while pending:
+            while pending or not iterator_exhausted:
+                if not pending:
+                    fill_pending()
+                    if not pending and iterator_exhausted:
+                        break
                 future = next(cf.as_completed(pending))
                 pending.remove(future)
                 tile_result = future.result()
@@ -482,10 +563,7 @@ class UnifiedSlideProcessor:
                 if self.run_nuclei_stage:
                     nuclei_record = tile_result["nuclei"] or dict(coord, nuclei_count=0)
                     nuclei_records.append(nuclei_record)
-                try:
-                    submit_one(next(iterator))
-                except StopIteration:
-                    pass
+                fill_pending()
 
                 if processed == 1 or processed % progress_every == 0 or (total_tiles and processed == total_tiles):
                     elapsed = time.monotonic() - started_at
@@ -496,12 +574,12 @@ class UnifiedSlideProcessor:
                         eta_seconds = remaining_tiles / rate if rate > 0 else 0.0
                         log(
                             f"Progress: {processed}/{total_tiles} tiles "
-                            f"({pct:.1f}%) elapsed={elapsed/60:.1f}m eta={eta_seconds/60:.1f}m"
+                            f"({pct:.1f}%) skipped={skipped} elapsed={elapsed/60:.1f}m eta={eta_seconds/60:.1f}m"
                         )
                     else:
                         log(
                             f"Progress: {processed} tiles processed "
-                            f"elapsed={elapsed/60:.1f}m rate={rate:.2f} tiles/s"
+                            f"skipped={skipped} elapsed={elapsed/60:.1f}m rate={rate:.2f} tiles/s"
                         )
 
         elapsed = time.monotonic() - started_at
@@ -512,7 +590,7 @@ class UnifiedSlideProcessor:
         denom = elapsed * max(1, self.workers)
         efficiency = (cpu_total / denom) if denom > 0 else 0.0
 
-        log(f"Tile pass complete: processed={processed} elapsed={elapsed/60:.1f}m")
+        log(f"Tile pass complete: processed={processed} skipped={skipped} elapsed={elapsed/60:.1f}m")
         log(f"Tile wall time: {elapsed:.1f}s")
         log(f"Tile CPU time (children user): {cpu_user:.1f}s")
         log(f"Tile CPU time (children total): {cpu_total:.1f}s")
