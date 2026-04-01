@@ -22,10 +22,17 @@ For one slide, output looks like:
 
 ```text
 <OUTPUT>/<SLIDE_NAME>/
+  meta.json
   clahe/
   stain/
   nuclei/
 ```
+
+Raw extracted arrays stay in their original tile-grid resolution:
+- `stain/*_map.npy`
+- `nuclei/nuclei_density_map.npy`
+
+Only the preview TIFFs are transformed to a fixed `1024 x 1024` canvas.
 
 ## Pipeline Schematic
 
@@ -38,11 +45,12 @@ flowchart TD
     C --> C1[Load associated thumbnail]
     C1 --> C2[Convert RGB to grayscale]
     C2 --> C3[Tissue mask with histomicstk]
-    C3 --> C4[Pad to 1024x1024]
-    C4 --> C5[Gamma correction]
-    C5 --> C6[CLAHE enhancement]
-    C6 --> C7[Threshold cleanup]
-    C7 --> C8[Write clahe/<stem>_0000.tif]
+    C3 --> C4[Fit while preserving aspect ratio]
+    C4 --> C5[Center-pad to 1024x1024]
+    C5 --> C6[Gamma correction]
+    C6 --> C7[CLAHE enhancement]
+    C7 --> C8[Threshold cleanup]
+    C8 --> C9[Write clahe/<stem>_0000.tif]
 
     D --> E[Tile as NumPy array]
     E --> F[Shared tile metadata<br/>coordinates level overlap]
@@ -52,7 +60,9 @@ flowchart TD
     H --> H1[Compute stain metrics per tile]
     H1 --> H2[Collect tile metric table]
     H2 --> H3[Build tile maps]
-    H3 --> H4[Write stain/*_map.npy]
+    H3 --> H4[Resize preview to thumbnail space]
+    H4 --> H5[Fit and pad preview to 1024x1024]
+    H5 --> H6[Write stain/*_map.npy and stain/<stem>_0002.tif]
 
     G -->|nuclei| I[Preprocess tile]
     I --> I1[Drop alpha if present]
@@ -65,10 +75,13 @@ flowchart TD
     I7 --> I8[Connected components]
     I8 --> I9[Count nuclei per tile]
     I9 --> I10[Build nuclei density map]
-    I10 --> I11[Resize to thumbnail space]
-    I11 --> I12[Write nuclei_density_map.npy]
-    I11 --> I13[Write nuclei/<stem>_0001.tif]
-    I10 --> I14[Write <sample>/meta.json]
+    I10 --> I11[Resize preview to thumbnail space]
+    I11 --> I12[Fit and pad preview to 1024x1024]
+    I10 --> I13[Write nuclei_density_map.npy]
+    I12 --> I14[Write nuclei/<stem>_0001.tif]
+    C9 --> I15[Write <sample>/meta.json with reversible transforms]
+    H6 --> I15
+    I14 --> I15
 ```
 
 ## Step-By-Step
@@ -98,6 +111,7 @@ What happens:
 - convert RGB thumbnail to grayscale
 - detect tissue mask with `histomicstk.saliency.tissue_detection.get_tissue_mask`
 - keep only tissue pixels
+- fit to the `1024 x 1024` canvas while preserving aspect ratio
 - center-pad to `1024 x 1024`
 - apply gamma correction
 - apply CLAHE
@@ -105,6 +119,7 @@ What happens:
 
 Output:
 - `clahe/<stem>_0000.tif`
+- transform metadata in `<sample>/meta.json`
 
 ### 3. Shared Tile Iterator
 
@@ -149,12 +164,21 @@ What is calculated:
 What happens after all tiles:
 - tile-level results are collected into a DataFrame
 - metric grids are built by tile position
+- raw stain maps stay at tile-grid resolution
+- stain preview TIFF is resized into thumbnail space, then fit+pad to `1024 x 1024`
 
 Output:
-- `stain/<stem>_IntensitySumPositive_map.npy`
-- `stain/<stem>_NumberPositive_map.npy`
-- `stain/<stem>_PercentagePositive_map.npy`
+- `stain/IntensitySumPositive_map.npy`
+- `stain/NumberPositive_map.npy`
+- `stain/PercentagePositive_map.npy`
 - `stain/<stem>_0002.tif`
+- transform metadata in `<sample>/meta.json`
+
+The stain TIFF preview is currently generated from `PercentagePositive` only, using a fixed display scale:
+- min = `0.0`
+- max = `0.02` (2%)
+
+That fixed range is also stored in `<sample>/meta.json`.
 
 ### 5. Nuclei Branch
 
@@ -183,14 +207,21 @@ What is calculated per tile:
 
 What happens after all tiles:
 - nuclei counts are written into a 2D tile-grid density map
-- density map is resized to thumbnail size
-- resized map is padded to `1024 x 1024`
+- raw nuclei map stays at tile-grid resolution
+- nuclei preview TIFF is resized to thumbnail size
+- nuclei preview TIFF is then fit+pad to `1024 x 1024`
 - metadata is saved
 
 Output:
 - `nuclei/nuclei_density_map.npy`
 - `<sample>/meta.json`
 - `nuclei/<stem>_0001.tif`
+
+`meta.json` includes reversible transform metadata for each preview TIFF:
+- the embedded image size inside the `1024 x 1024` canvas
+- padding offsets
+- crop coordinates for extracting predictions back out of the padded image
+- the raw target map size to resize predictions onto `stain_map.npy` or `nuclei_density_map.npy`
 
 ### 6. Parallelism
 

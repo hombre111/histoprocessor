@@ -66,6 +66,54 @@ def pad_center_2d(arr: np.ndarray, target_hw=(1024, 1024), pad_value=0) -> np.nd
     return np.pad(arr, ((top, bottom), (left, right)), mode="constant", constant_values=pad_value)
 
 
+def fit_and_pad_2d(
+    arr: np.ndarray,
+    target_hw: tuple[int, int] = (1024, 1024),
+    *,
+    interpolation: int = cv2.INTER_NEAREST,
+    pad_value: int | float = 0,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    h, w = arr.shape[:2]
+    th, tw = target_hw
+    if h <= 0 or w <= 0:
+        raise ValueError("Cannot fit-and-pad an empty array")
+
+    scale = min(1.0, th / float(h), tw / float(w))
+    if scale < 1.0:
+        resized_w = max(1, int(round(w * scale)))
+        resized_h = max(1, int(round(h * scale)))
+        resized = cv2.resize(arr, (resized_w, resized_h), interpolation=interpolation)
+    else:
+        resized = arr
+        resized_h, resized_w = h, w
+
+    ph = max(0, th - resized_h)
+    pw = max(0, tw - resized_w)
+    top = ph // 2
+    bottom = ph - top
+    left = pw // 2
+    right = pw - left
+    padded = np.pad(resized, ((top, bottom), (left, right)), mode="constant", constant_values=pad_value)
+    meta = {
+        "target_height": int(th),
+        "target_width": int(tw),
+        "source_height": int(h),
+        "source_width": int(w),
+        "embedded_height": int(resized_h),
+        "embedded_width": int(resized_w),
+        "pad_top": int(top),
+        "pad_bottom": int(bottom),
+        "pad_left": int(left),
+        "pad_right": int(right),
+        "crop_y0": int(top),
+        "crop_y1": int(top + resized_h),
+        "crop_x0": int(left),
+        "crop_x1": int(left + resized_w),
+        "scale": float(scale),
+    }
+    return padded, meta
+
+
 def apply_gamma(image_u8: np.ndarray, gamma=1.0) -> np.ndarray:
     inv_gamma = 1.0 / gamma
     table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(256)], dtype=np.uint8)
@@ -84,16 +132,21 @@ def build_thumbnail_tissue_mask(
     gamma: float = 0.5,
     clahe_clip: float = 12.0,
     clahe_grid: int = 4,
-    dilate_kernel: int = 15,
+    dilate_kernel: int = 31,
+    close_kernel: int = 9,
 ) -> tuple[np.ndarray, tuple[int, int]]:
     slide = openslide.OpenSlide(str(slide_path))
     thumb = np.array(slide.associated_images["thumbnail"])
     img_gray = cv2.cvtColor(thumb, cv2.COLOR_RGB2GRAY)
+    _, raw_mask = get_tissue_mask(255 - img_gray)
     gamma_corrected = apply_gamma(img_gray, gamma=gamma)
     clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(clahe_grid, clahe_grid))
     enhanced = clahe.apply(gamma_corrected)
-    _, mask = get_tissue_mask(255 - enhanced)
-    mask_u8 = mask.astype(np.uint8)
+    _, enhanced_mask = get_tissue_mask(255 - enhanced)
+    mask_u8 = np.logical_or(raw_mask, enhanced_mask).astype(np.uint8)
+    if close_kernel > 1:
+        kernel = np.ones((close_kernel, close_kernel), dtype=np.uint8)
+        mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
     if dilate_kernel > 1:
         kernel = np.ones((dilate_kernel, dilate_kernel), dtype=np.uint8)
         mask_u8 = cv2.dilate(mask_u8, kernel, iterations=1)
@@ -106,6 +159,7 @@ def build_tile_keep_grid(
     slide_size: tuple[int, int],
     tile_size: int,
     overlap_threshold: float = 0.0,
+    dilate_tiles: int = 1,
 ) -> np.ndarray:
     thumb_w, thumb_h = thumb_size
     slide_w, slide_h = slide_size
@@ -128,6 +182,11 @@ def build_tile_keep_grid(
             region = tissue_mask[y0:y1, x0:x1]
             overlap = float(region.mean()) if region.size else 0.0
             keep[ty, tx] = overlap > overlap_threshold
+
+    if dilate_tiles > 0:
+        kernel_size = 2 * int(dilate_tiles) + 1
+        kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+        keep = cv2.dilate(keep.astype(np.uint8), kernel, iterations=1).astype(bool)
 
     return keep
 
@@ -312,9 +371,9 @@ def build_metric_arrays(tiled_info: pd.DataFrame, metrics: list[str]) -> dict[st
     return arrays
 
 
-def save_metric_arrays(arrays: dict[str, np.ndarray], output_dir: Path, filename: str) -> None:
+def save_metric_arrays(arrays: dict[str, np.ndarray], output_dir: Path) -> None:
     for metric, arr in arrays.items():
-        np.save(output_dir / f"{filename}_{metric}_map.npy", arr)
+        np.save(output_dir / f"{metric}_map.npy", arr)
 
 
 def save_stain_preview(
@@ -322,12 +381,12 @@ def save_stain_preview(
     arrays: dict[str, np.ndarray],
     output_dir: Path,
     *,
-    metric_preference: tuple[str, ...] = ("PercentagePositive", "IntensitySumPositive", "NumberPositive"),
-) -> None:
+    metric_preference: tuple[str, ...] = ("PercentagePositive",),
+) -> dict[str, Any] | None:
     output_dir.mkdir(parents=True, exist_ok=True)
     metric_name = next((name for name in metric_preference if name in arrays), None)
     if metric_name is None:
-        return
+        return None
 
     arr = np.nan_to_num(arrays[metric_name].astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
     slide = openslide.OpenSlide(str(slide_path))
@@ -335,17 +394,40 @@ def save_stain_preview(
     th_h, th_w = thumbnail.shape[:2]
 
     resized = cv2.resize(arr, (th_w, th_h), interpolation=cv2.INTER_NEAREST)
-    padded = pad_center_2d(resized, (1024, 1024), pad_value=0).astype(np.float32)
-    lo = float(np.percentile(padded, 1))
-    hi = float(np.percentile(padded, 99))
-    if hi > lo:
-        norm = (padded - lo) / (hi - lo)
-    else:
-        max_val = float(padded.max())
-        norm = padded / max_val if max_val > 0 else np.zeros_like(padded, dtype=np.float32)
+    padded, transform = fit_and_pad_2d(resized.astype(np.float32), (1024, 1024), interpolation=cv2.INTER_NEAREST)
+    padded = padded.astype(np.float32)
+    lo = 0.0
+    hi = 0.02
+    norm = (padded - lo) / (hi - lo)
+    scaling = {"mode": "fixed", "min": lo, "max": hi, "units": "fraction_positive"}
     norm = np.clip(norm, 0.0, 1.0)
     preview_u8 = (norm * 255.0).astype(np.uint8)
-    cv2.imwrite(str(output_dir / f"{slide_path.stem}_0002.tif"), preview_u8)
+    preview_path = output_dir / f"{slide_path.stem}_0002.tif"
+    cv2.imwrite(str(preview_path), preview_u8)
+    return {
+        "kind": "stain",
+        "metric_name": metric_name,
+        "map_height": int(arr.shape[0]),
+        "map_width": int(arr.shape[1]),
+        "thumbnail_height": int(th_h),
+        "thumbnail_width": int(th_w),
+        "preview_tif": str(preview_path),
+        "transform": transform,
+        "scaling": scaling,
+        "reverse_mapping": {
+            "prediction_crop": {
+                "y0": transform["crop_y0"],
+                "y1": transform["crop_y1"],
+                "x0": transform["crop_x0"],
+                "x1": transform["crop_x1"],
+            },
+            "resize_prediction_to_map": {
+                "width": int(arr.shape[1]),
+                "height": int(arr.shape[0]),
+                "interpolation": "nearest",
+            },
+        },
+    }
 
 
 def build_nuclei_density_map(records: list[dict[str, Any]]) -> tuple[np.ndarray, int, int]:
@@ -364,13 +446,11 @@ def save_nuclei_outputs(
     slide_path: Path,
     density_map: np.ndarray,
     output_dir: Path,
-    sample_output_dir: Path,
     reference_image: str,
     bands: int,
     tile_size: int,
-) -> None:
+) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    sample_output_dir.mkdir(parents=True, exist_ok=True)
     stem = slide_path.stem
     np.save(output_dir / "nuclei_density_map.npy", density_map)
 
@@ -378,29 +458,82 @@ def save_nuclei_outputs(
     thumbnail = np.array(slide.associated_images["thumbnail"])
     th_h, th_w = thumbnail.shape[:2]
 
-    with open(sample_output_dir / "meta.json", "w") as f:
-        json.dump(
-            {
-                "slide_path": str(slide_path.resolve()),
-                "tile_size": int(tile_size),
-                "slide_width": int(slide.dimensions[0]),
-                "slide_height": int(slide.dimensions[1]),
-                "bands": int(bands),
-                "map_w": int(density_map.shape[1]),
-                "map_h": int(density_map.shape[0]),
-                "reference_image": reference_image,
-                "normalization": "reinhard",
-                "thumbnail_width": int(th_w),
-                "thumbnail_height": int(th_h),
-            },
-            f,
-            indent=2,
-        )
-
     resized_counts = cv2.resize(density_map, (th_w, th_h), interpolation=cv2.INTER_NEAREST)
-    padded = pad_center_2d(resized_counts, (1024, 1024), pad_value=0)
+    padded, transform = fit_and_pad_2d(resized_counts.astype(np.float32), (1024, 1024), interpolation=cv2.INTER_NEAREST)
     to_save = np.clip(padded, 0, 255).astype(np.uint8)
-    cv2.imwrite(str(output_dir / f"{stem}_0001.tif"), to_save)
+    preview_path = output_dir / f"{stem}_0001.tif"
+    cv2.imwrite(str(preview_path), to_save)
+    return {
+        "kind": "nuclei",
+        "map_height": int(density_map.shape[0]),
+        "map_width": int(density_map.shape[1]),
+        "thumbnail_height": int(th_h),
+        "thumbnail_width": int(th_w),
+        "preview_tif": str(preview_path),
+        "transform": transform,
+        "reference_image": reference_image,
+        "normalization": "reinhard",
+        "bands": int(bands),
+        "tile_size": int(tile_size),
+        "reverse_mapping": {
+            "prediction_crop": {
+                "y0": transform["crop_y0"],
+                "y1": transform["crop_y1"],
+                "x0": transform["crop_x0"],
+                "x1": transform["crop_x1"],
+            },
+            "resize_prediction_to_map": {
+                "width": int(density_map.shape[1]),
+                "height": int(density_map.shape[0]),
+                "interpolation": "nearest",
+            },
+        },
+    }
+
+
+def write_sample_metadata(
+    sample_output_dir: Path,
+    slide_path: Path,
+    tile_size: int,
+    bands: int,
+    clahe_meta: dict[str, Any] | None,
+    stain_meta: dict[str, Any] | None,
+    nuclei_meta: dict[str, Any] | None,
+) -> None:
+    sample_output_dir.mkdir(parents=True, exist_ok=True)
+    slide = openslide.OpenSlide(str(slide_path))
+    thumbnail = np.array(slide.associated_images["thumbnail"])
+    th_h, th_w = thumbnail.shape[:2]
+    metadata = {
+        "slide_path": str(slide_path.resolve()),
+        "tile_size": int(tile_size),
+        "slide_width": int(slide.dimensions[0]),
+        "slide_height": int(slide.dimensions[1]),
+        "bands": int(bands),
+        "thumbnail_width": int(th_w),
+        "thumbnail_height": int(th_h),
+        "transforms": {},
+        "maps": {},
+    }
+    if clahe_meta is not None:
+        metadata["transforms"]["clahe"] = clahe_meta
+    if stain_meta is not None:
+        metadata["transforms"]["stain"] = stain_meta
+        metadata["maps"]["stain"] = {
+            "metric_name": stain_meta["metric_name"],
+            "map_width": stain_meta["map_width"],
+            "map_height": stain_meta["map_height"],
+        }
+    if nuclei_meta is not None:
+        metadata["transforms"]["nuclei"] = nuclei_meta
+        metadata["maps"]["nuclei"] = {
+            "map_width": nuclei_meta["map_width"],
+            "map_height": nuclei_meta["map_height"],
+            "reference_image": nuclei_meta["reference_image"],
+            "normalization": nuclei_meta["normalization"],
+        }
+    with open(sample_output_dir / "meta.json", "w") as f:
+        json.dump(metadata, f, indent=2)
 
 
 def save_clahe_output(
@@ -411,19 +544,32 @@ def save_clahe_output(
     clahe_clip: float = 12.0,
     clahe_grid: int = 4,
     thresh: int = 13,
-) -> None:
+) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     slide = openslide.OpenSlide(str(slide_path))
     thumb = np.array(slide.associated_images["thumbnail"])
     img_gray = cv2.cvtColor(thumb, cv2.COLOR_RGB2GRAY)
     _, mask = get_tissue_mask(255 - img_gray)
     tissue_only = np.where(mask, img_gray, 0).astype(np.uint8)
-    padded = pad_center_2d(tissue_only, (pad, pad), pad_value=0).astype(np.uint8)
+    padded, transform = fit_and_pad_2d(tissue_only, (pad, pad), interpolation=cv2.INTER_NEAREST, pad_value=0)
+    padded = padded.astype(np.uint8)
     gamma_corrected = apply_gamma(padded, gamma=gamma)
     clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(clahe_grid, clahe_grid))
     enhanced = clahe.apply(gamma_corrected)
     enhanced[enhanced <= thresh] = 0
-    cv2.imwrite(str(output_dir / f"{slide_path.stem}_0000.tif"), enhanced)
+    preview_path = output_dir / f"{slide_path.stem}_0000.tif"
+    cv2.imwrite(str(preview_path), enhanced)
+    return {
+        "kind": "clahe",
+        "thumbnail_height": int(thumb.shape[0]),
+        "thumbnail_width": int(thumb.shape[1]),
+        "preview_tif": str(preview_path),
+        "transform": transform,
+        "gamma": float(gamma),
+        "clahe_clip": float(clahe_clip),
+        "clahe_grid": int(clahe_grid),
+        "threshold": int(thresh),
+    }
 
 
 @dataclass
@@ -533,6 +679,7 @@ class UnifiedSlideProcessor:
             slide_size,
             self.tile_size,
             overlap_threshold=tissue_overlap_threshold,
+            dilate_tiles=1,
         )
         tissue_coverage = float(tissue_mask.mean()) if tissue_mask.size else 0.0
         kept_tiles = int(keep_grid.sum())
@@ -670,11 +817,15 @@ class UnifiedSlideProcessor:
             raise ValueError("At least one stage must be enabled")
 
         self.output_root.mkdir(parents=True, exist_ok=True)
+        clahe_meta: dict[str, Any] | None = None
+        stain_meta: dict[str, Any] | None = None
+        nuclei_meta: dict[str, Any] | None = None
+        bands_for_meta = 3
 
         if self.run_clahe_stage:
             try:
                 log(f"Starting CLAHE for {self.slide_path.name}")
-                save_clahe_output(self.slide_path, self.output_root / "clahe")
+                clahe_meta = save_clahe_output(self.slide_path, self.output_root / "clahe")
                 log(f"Finished CLAHE for {self.slide_path.name}")
                 status.success["clahe"] = True
             except Exception as exc:
@@ -684,6 +835,7 @@ class UnifiedSlideProcessor:
         if self.run_stain_stage or self.run_nuclei_stage:
             try:
                 stain_records, nuclei_records, bands = self._run_tile_pipeline(status)
+                bands_for_meta = int(bands)
 
                 if self.run_stain_stage:
                     stain_df = pd.DataFrame(stain_records)
@@ -700,18 +852,17 @@ class UnifiedSlideProcessor:
                     )
                     stain_out = self.output_root / "stain"
                     stain_out.mkdir(parents=True, exist_ok=True)
-                    save_metric_arrays(stain_arrays, stain_out, self.slide_path.stem)
-                    save_stain_preview(self.slide_path, stain_arrays, stain_out)
+                    save_metric_arrays(stain_arrays, stain_out)
+                    stain_meta = save_stain_preview(self.slide_path, stain_arrays, stain_out)
                     status.success["stain"] = True
 
                 if self.run_nuclei_stage:
                     density_map, _, _ = build_nuclei_density_map(nuclei_records)
                     nuclei_out = self.output_root / "nuclei"
-                    save_nuclei_outputs(
+                    nuclei_meta = save_nuclei_outputs(
                         self.slide_path,
                         density_map,
                         nuclei_out,
-                        self.output_root,
                         self.reference_image,
                         bands,
                         self.tile_size,
@@ -724,6 +875,20 @@ class UnifiedSlideProcessor:
                 if self.run_nuclei_stage:
                     status.success.setdefault("nuclei", False)
                     status.errors.setdefault("nuclei", []).append(str(exc))
+
+        if self.run_clahe_stage or self.run_stain_stage or self.run_nuclei_stage:
+            try:
+                write_sample_metadata(
+                    self.output_root,
+                    self.slide_path,
+                    self.tile_size,
+                    bands_for_meta,
+                    clahe_meta,
+                    stain_meta,
+                    nuclei_meta,
+                )
+            except Exception as exc:
+                status.errors.setdefault("meta", []).append(str(exc))
 
         return status
 

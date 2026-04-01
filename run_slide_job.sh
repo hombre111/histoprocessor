@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=unified-histo
 #SBATCH --time=06:00:00
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 
 set -euo pipefail
