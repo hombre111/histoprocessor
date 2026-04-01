@@ -1,0 +1,98 @@
+digraph UnifiedHistologyPipelineCompact {
+  graph [
+    rankdir=TB,
+    splines=polyline,
+    nodesep=0.28,
+    ranksep=0.5,
+    pad=0.18,
+    bgcolor="white",
+    fontname="Helvetica"
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fillcolor="#f8fafc",
+    color="#334155",
+    fontname="Helvetica",
+    fontsize=10,
+    margin="0.08,0.06"
+  ];
+
+  edge [
+    color="#475569",
+    arrowsize=0.7,
+    penwidth=1.1
+  ];
+
+  input [label="Input WSI", fillcolor="#dbeafe", color="#1d4ed8"];
+  select [label="Select stages\nclahe / stain / nuclei", shape=diamond, fillcolor="#e2e8f0"];
+
+  input -> select;
+
+  subgraph cluster_clahe {
+    label="CLAHE";
+    color="#93c5fd";
+    style="rounded";
+    fontsize=12;
+
+    c0 [label="Thumbnail", fillcolor="#eff6ff"];
+    c1 [label="Gray + tissue mask", fillcolor="#eff6ff"];
+    c2 [label="Pad + gamma + CLAHE", fillcolor="#eff6ff"];
+    c3 [label="Output\nclahe/<stem>_0000.tif", fillcolor="#d1fae5", color="#047857"];
+
+    c0 -> c1 -> c2 -> c3;
+  }
+
+  subgraph cluster_shared {
+    label="Shared tile pass";
+    color="#cbd5e1";
+    style="rounded";
+    fontsize=12;
+
+    t0 [label="large_image tileIterator", fillcolor="#f1f5f9"];
+    t1 [label="NumPy tile + metadata", fillcolor="#f1f5f9"];
+    split [label="Per-tile branches", shape=diamond, fillcolor="#e2e8f0"];
+
+    t0 -> t1 -> split;
+  }
+
+  subgraph cluster_stain {
+    label="Stain";
+    color="#fcd34d";
+    style="rounded";
+    fontsize=12;
+
+    s0 [label="Positive pixel count", fillcolor="#fffbeb"];
+    s1 [label="Tile metrics", fillcolor="#fffbeb"];
+    s2 [label="Metric maps", fillcolor="#fffbeb"];
+    s3 [label="Output\nstain/*_map.npy", fillcolor="#d1fae5", color="#047857"];
+
+    s0 -> s1 -> s2 -> s3;
+  }
+
+  subgraph cluster_nuclei {
+    label="Nuclei";
+    color="#f9a8d4";
+    style="rounded";
+    fontsize=12;
+
+    n0 [label="Drop alpha\nskip white tiles", fillcolor="#fdf2f8"];
+    n1 [label="Reinhard normalize", fillcolor="#fdf2f8"];
+    n2 [label="Color deconvolution\nhematoxylin channel", fillcolor="#fdf2f8"];
+    n3 [label="Threshold + morphology", fillcolor="#fdf2f8"];
+    n4 [label="Connected components\ncount nuclei", fillcolor="#fdf2f8"];
+    n5 [label="Density map + resize", fillcolor="#fdf2f8"];
+    n6 [label="Outputs\nnuclei_density_map.npy\nmeta.json\n<stem>_0001.tif", fillcolor="#d1fae5", color="#047857"];
+
+    n0 -> n1 -> n2 -> n3 -> n4 -> n5 -> n6;
+  }
+
+  select -> c0;
+  select -> t0;
+  split -> s0;
+  split -> n0;
+
+  {rank=same; c0; t0}
+  {rank=same; s0; n0}
+}
