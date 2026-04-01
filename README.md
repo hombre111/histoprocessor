@@ -129,7 +129,7 @@ What happens:
 This shared iterator is the core optimization:
 - the slide is traversed once
 - stain and nuclei are both computed from the same tile buffer
-- tile inclusion is decided from a global tissue mask built on the thumbnail
+- tile inclusion is decided from one shared precomputed tile grid derived from a global thumbnail tissue mask
 
 ### 4. Stain Branch
 
@@ -154,6 +154,7 @@ Output:
 - `stain/<stem>_IntensitySumPositive_map.npy`
 - `stain/<stem>_NumberPositive_map.npy`
 - `stain/<stem>_PercentagePositive_map.npy`
+- `stain/<stem>_0002.tif`
 
 ### 5. Nuclei Branch
 
@@ -164,8 +165,8 @@ Input:
 
 What is calculated per tile:
 - remove alpha channel if present
-- check overlap with a global tissue mask built from the thumbnail
-- skip only tiles with almost no tissue-mask overlap
+- check one shared tile keep-mask derived from the thumbnail tissue mask
+- skip only tiles with zero tissue-mask support in that precomputed grid
 - apply Reinhard color normalization
   - this normalizes tile color distribution to match a reference tile
   - goal: reduce stain/color variation across slides

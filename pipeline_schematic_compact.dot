@@ -50,11 +50,13 @@ digraph UnifiedHistologyPipelineCompact {
     style="rounded";
     fontsize=12;
 
-    t0 [label="large_image tileIterator", fillcolor="#f1f5f9"];
-    t1 [label="NumPy tile + metadata", fillcolor="#f1f5f9"];
-    split [label="Per-tile branches", shape=diamond, fillcolor="#e2e8f0"];
+    t0 [label="Thumbnail tissue mask", fillcolor="#f1f5f9"];
+    t1 [label="Precomputed tile keep grid", fillcolor="#f1f5f9"];
+    t2 [label="large_image tileIterator", fillcolor="#f1f5f9"];
+    t3 [label="NumPy tile + metadata", fillcolor="#f1f5f9"];
+    split [label="Shared keep/skip gate\nthen per-tile branches", shape=diamond, fillcolor="#e2e8f0"];
 
-    t0 -> t1 -> split;
+    t0 -> t1 -> t2 -> t3 -> split;
   }
 
   subgraph cluster_stain {
@@ -66,7 +68,7 @@ digraph UnifiedHistologyPipelineCompact {
     s0 [label="Positive pixel count", fillcolor="#fffbeb"];
     s1 [label="Tile metrics", fillcolor="#fffbeb"];
     s2 [label="Metric maps", fillcolor="#fffbeb"];
-    s3 [label="Output\nstain/*_map.npy", fillcolor="#d1fae5", color="#047857"];
+    s3 [label="Outputs\nstain/*_map.npy\n<stem>_0002.tif", fillcolor="#d1fae5", color="#047857"];
 
     s0 -> s1 -> s2 -> s3;
   }
@@ -77,13 +79,13 @@ digraph UnifiedHistologyPipelineCompact {
     style="rounded";
     fontsize=12;
 
-    n0 [label="Drop alpha\nskip white tiles", fillcolor="#fdf2f8"];
+    n0 [label="Drop alpha", fillcolor="#fdf2f8"];
     n1 [label="Reinhard normalize", fillcolor="#fdf2f8"];
     n2 [label="Color deconvolution\nhematoxylin channel", fillcolor="#fdf2f8"];
     n3 [label="Threshold + morphology", fillcolor="#fdf2f8"];
     n4 [label="Connected components\ncount nuclei", fillcolor="#fdf2f8"];
     n5 [label="Density map + resize", fillcolor="#fdf2f8"];
-    n6 [label="Outputs\nnuclei_density_map.npy\nmeta.json\n<stem>_0001.tif", fillcolor="#d1fae5", color="#047857"];
+    n6 [label="Outputs\nnuclei_density_map.npy\n<stem>_0001.tif\nsample/meta.json", fillcolor="#d1fae5", color="#047857"];
 
     n0 -> n1 -> n2 -> n3 -> n4 -> n5 -> n6;
   }

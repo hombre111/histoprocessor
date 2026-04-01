@@ -84,7 +84,7 @@ def build_thumbnail_tissue_mask(
     gamma: float = 0.5,
     clahe_clip: float = 12.0,
     clahe_grid: int = 4,
-    dilate_kernel: int = 3,
+    dilate_kernel: int = 15,
 ) -> tuple[np.ndarray, tuple[int, int]]:
     slide = openslide.OpenSlide(str(slide_path))
     thumb = np.array(slide.associated_images["thumbnail"])
@@ -100,28 +100,52 @@ def build_thumbnail_tissue_mask(
     return mask_u8.astype(bool), (thumb.shape[1], thumb.shape[0])
 
 
-def tile_tissue_overlap(
-    tile_info: dict[str, Any],
+def build_tile_keep_grid(
     tissue_mask: np.ndarray,
     thumb_size: tuple[int, int],
     slide_size: tuple[int, int],
-) -> float:
+    tile_size: int,
+    overlap_threshold: float = 0.0,
+) -> np.ndarray:
     thumb_w, thumb_h = thumb_size
     slide_w, slide_h = slide_size
-    gx = int(tile_info.get("gx", 0) or 0)
-    gy = int(tile_info.get("gy", 0) or 0)
-    gw = int(tile_info.get("gwidth", 0) or tile_info.get("width", 0) or 0)
-    gh = int(tile_info.get("gheight", 0) or tile_info.get("height", 0) or 0)
+    tiles_x = int(np.ceil(slide_w / max(1, tile_size)))
+    tiles_y = int(np.ceil(slide_h / max(1, tile_size)))
+    keep = np.zeros((tiles_y, tiles_x), dtype=bool)
 
-    x0 = max(0, min(thumb_w - 1, int(np.floor(gx * thumb_w / max(1, slide_w)))))
-    y0 = max(0, min(thumb_h - 1, int(np.floor(gy * thumb_h / max(1, slide_h)))))
-    x1 = max(x0 + 1, min(thumb_w, int(np.ceil((gx + gw) * thumb_w / max(1, slide_w)))))
-    y1 = max(y0 + 1, min(thumb_h, int(np.ceil((gy + gh) * thumb_h / max(1, slide_h)))))
+    for ty in range(tiles_y):
+        gy = ty * tile_size
+        gh = min(tile_size, max(0, slide_h - gy))
+        for tx in range(tiles_x):
+            gx = tx * tile_size
+            gw = min(tile_size, max(0, slide_w - gx))
 
-    region = tissue_mask[y0:y1, x0:x1]
-    if region.size == 0:
-        return 0.0
-    return float(region.mean())
+            x0 = max(0, min(thumb_w - 1, int(np.floor(gx * thumb_w / max(1, slide_w)))))
+            y0 = max(0, min(thumb_h - 1, int(np.floor(gy * thumb_h / max(1, slide_h)))))
+            x1 = max(x0 + 1, min(thumb_w, int(np.ceil((gx + gw) * thumb_w / max(1, slide_w)))))
+            y1 = max(y0 + 1, min(thumb_h, int(np.ceil((gy + gh) * thumb_h / max(1, slide_h)))))
+
+            region = tissue_mask[y0:y1, x0:x1]
+            overlap = float(region.mean()) if region.size else 0.0
+            keep[ty, tx] = overlap > overlap_threshold
+
+    return keep
+
+
+def should_keep_tile(tile_info: dict[str, Any], keep_grid: np.ndarray, tile_size: int) -> bool:
+    tile_position = tile_info.get("tile_position", {})
+    tx = tile_position.get("level_x")
+    ty = tile_position.get("level_y")
+    if tx is None or ty is None:
+        gx = int(tile_info.get("gx", 0) or 0)
+        gy = int(tile_info.get("gy", 0) or 0)
+        tx = gx // max(1, tile_size)
+        ty = gy // max(1, tile_size)
+    tx = int(tx)
+    ty = int(ty)
+    if ty < 0 or tx < 0 or ty >= keep_grid.shape[0] or tx >= keep_grid.shape[1]:
+        return False
+    return bool(keep_grid[ty, tx])
 
 
 def make_skipped_stain_record(tile_info: dict[str, Any]) -> dict[str, Any]:
@@ -291,6 +315,37 @@ def build_metric_arrays(tiled_info: pd.DataFrame, metrics: list[str]) -> dict[st
 def save_metric_arrays(arrays: dict[str, np.ndarray], output_dir: Path, filename: str) -> None:
     for metric, arr in arrays.items():
         np.save(output_dir / f"{filename}_{metric}_map.npy", arr)
+
+
+def save_stain_preview(
+    slide_path: Path,
+    arrays: dict[str, np.ndarray],
+    output_dir: Path,
+    *,
+    metric_preference: tuple[str, ...] = ("PercentagePositive", "IntensitySumPositive", "NumberPositive"),
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_name = next((name for name in metric_preference if name in arrays), None)
+    if metric_name is None:
+        return
+
+    arr = np.nan_to_num(arrays[metric_name].astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    slide = openslide.OpenSlide(str(slide_path))
+    thumbnail = np.array(slide.associated_images["thumbnail"])
+    th_h, th_w = thumbnail.shape[:2]
+
+    resized = cv2.resize(arr, (th_w, th_h), interpolation=cv2.INTER_NEAREST)
+    padded = pad_center_2d(resized, (1024, 1024), pad_value=0).astype(np.float32)
+    lo = float(np.percentile(padded, 1))
+    hi = float(np.percentile(padded, 99))
+    if hi > lo:
+        norm = (padded - lo) / (hi - lo)
+    else:
+        max_val = float(padded.max())
+        norm = padded / max_val if max_val > 0 else np.zeros_like(padded, dtype=np.float32)
+    norm = np.clip(norm, 0.0, 1.0)
+    preview_u8 = (norm * 255.0).astype(np.uint8)
+    cv2.imwrite(str(output_dir / f"{slide_path.stem}_0002.tif"), preview_u8)
 
 
 def build_nuclei_density_map(records: list[dict[str, Any]]) -> tuple[np.ndarray, int, int]:
@@ -470,9 +525,18 @@ class UnifiedSlideProcessor:
         skipped = 0
         started_at = time.monotonic()
         total_tiles: int | None = None
-        tissue_overlap_threshold = 0.001
+        tissue_overlap_threshold = 0.0
         tissue_mask, thumb_size = build_thumbnail_tissue_mask(self.slide_path)
+        keep_grid = build_tile_keep_grid(
+            tissue_mask,
+            thumb_size,
+            slide_size,
+            self.tile_size,
+            overlap_threshold=tissue_overlap_threshold,
+        )
         tissue_coverage = float(tissue_mask.mean()) if tissue_mask.size else 0.0
+        kept_tiles = int(keep_grid.sum())
+        total_grid_tiles = int(keep_grid.size)
 
         log(
             f"Starting tile pass for {self.slide_path.name}: "
@@ -483,6 +547,7 @@ class UnifiedSlideProcessor:
             f"Thumbnail tissue mask ready: size={thumb_size[0]}x{thumb_size[1]} "
             f"coverage={tissue_coverage*100:.2f}% overlap_threshold={tissue_overlap_threshold:.4f}"
         )
+        log(f"Tile keep grid ready: kept={kept_tiles}/{total_grid_tiles} tiles")
 
         with cf.ProcessPoolExecutor(
             max_workers=self.workers,
@@ -495,8 +560,7 @@ class UnifiedSlideProcessor:
 
             def submit_one(tile_info: dict[str, Any]) -> bool:
                 nonlocal processed, skipped, first_bands
-                overlap = tile_tissue_overlap(tile_info, tissue_mask, thumb_size, slide_size)
-                if overlap < tissue_overlap_threshold:
+                if not should_keep_tile(tile_info, keep_grid, self.tile_size):
                     coord = add_tile_metadata({}, tile_info)
                     if self.run_stain_stage:
                         stain_records.append(make_skipped_stain_record(tile_info))
@@ -637,6 +701,7 @@ class UnifiedSlideProcessor:
                     stain_out = self.output_root / "stain"
                     stain_out.mkdir(parents=True, exist_ok=True)
                     save_metric_arrays(stain_arrays, stain_out, self.slide_path.stem)
+                    save_stain_preview(self.slide_path, stain_arrays, stain_out)
                     status.success["stain"] = True
 
                 if self.run_nuclei_stage:

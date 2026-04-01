@@ -1,0 +1,45 @@
+2026-04-01 17:29:32 [histoprocessor] Node: compa038
+2026-04-01 17:29:32 [histoprocessor] Image: /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs
+2026-04-01 17:29:32 [histoprocessor] Output: /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1
+2026-04-01 17:29:32 [histoprocessor] Mode: all
+2026-04-01 17:29:32 [histoprocessor] Magnification: 40
+2026-04-01 17:29:32 [histoprocessor] Tile size: 512
+2026-04-01 17:29:32 [histoprocessor] Workers: 8
+2026-04-01 17:31:05 [histoprocessor] Starting CLAHE for 00-1006-A-IBA1.svs
+2026-04-01 17:31:07 [histoprocessor] Finished CLAHE for 00-1006-A-IBA1.svs
+2026-04-01 17:31:34 [histoprocessor] Starting tile pass for 00-1006-A-IBA1.svs: stages=clahe,stain,nuclei magnification=40 tile_size=512 workers=8
+2026-04-01 17:31:34 [histoprocessor] Thumbnail tissue mask ready: size=848x768 coverage=58.44% overlap_threshold=0.0000
+2026-04-01 17:31:34 [histoprocessor] Tile keep grid ready: kept=15223/25536 tiles
+2026-04-01 17:31:35 [histoprocessor] Total tiles scheduled: 25536
+2026-04-01 17:32:03 [histoprocessor] Progress: 2552/25536 tiles (10.0%) skipped=1583 elapsed=0.5m eta=4.3m
+2026-04-01 17:33:00 [histoprocessor] Progress: 5104/25536 tiles (20.0%) skipped=2130 elapsed=1.4m eta=5.7m
+2026-04-01 17:34:01 [histoprocessor] Progress: 7656/25536 tiles (30.0%) skipped=2494 elapsed=2.5m eta=5.7m
+2026-04-01 17:34:27 [histoprocessor] Progress: 8932/25536 tiles (35.0%) skipped=2864 elapsed=2.9m eta=5.4m
+2026-04-01 17:34:52 [histoprocessor] Progress: 10208/25536 tiles (40.0%) skipped=3264 elapsed=3.3m eta=5.0m
+2026-04-01 17:35:17 [histoprocessor] Progress: 11484/25536 tiles (45.0%) skipped=3648 elapsed=3.7m eta=4.6m
+2026-04-01 17:36:09 [histoprocessor] Progress: 14036/25536 tiles (55.0%) skipped=4398 elapsed=4.6m eta=3.8m
+2026-04-01 17:36:58 [histoprocessor] Progress: 16588/25536 tiles (65.0%) skipped=5204 elapsed=5.4m eta=2.9m
+2026-04-01 17:37:20 [histoprocessor] Progress: 17864/25536 tiles (70.0%) skipped=5696 elapsed=5.8m eta=2.5m
+2026-04-01 17:38:03 [histoprocessor] Progress: 20416/25536 tiles (79.9%) skipped=6723 elapsed=6.5m eta=1.6m
+2026-04-01 17:38:40 [histoprocessor] Progress: 22968/25536 tiles (89.9%) skipped=7949 elapsed=7.1m eta=0.8m
+2026-04-01 17:38:46 [histoprocessor] Progress: 25536/25536 tiles (100.0%) skipped=10313 elapsed=7.2m eta=0.0m
+2026-04-01 17:38:47 [histoprocessor] Tile pass complete: processed=25536 skipped=10313 elapsed=7.2m
+2026-04-01 17:38:47 [histoprocessor] Tile wall time: 432.9s
+2026-04-01 17:38:47 [histoprocessor] Tile CPU time (children user): 3006.8s
+2026-04-01 17:38:47 [histoprocessor] Tile CPU time (children total): 3418.8s
+2026-04-01 17:38:47 [histoprocessor] Parallelism efficiency: 0.99
+{
+  "enabled": [
+    "clahe",
+    "stain",
+    "nuclei"
+  ],
+  "success": {
+    "clahe": true,
+    "stain": true,
+    "nuclei": true
+  },
+  "errors": {},
+  "tile_failures": {}
+}
+2026-04-01 17:38:54 [histoprocessor] Done: /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs
