@@ -138,11 +138,13 @@ def build_thumbnail_tissue_mask(
     slide = openslide.OpenSlide(str(slide_path))
     thumb = np.array(slide.associated_images["thumbnail"])
     img_gray = cv2.cvtColor(thumb, cv2.COLOR_RGB2GRAY)
-    _, raw_mask = get_tissue_mask(255 - img_gray)
+    raw_labeled, _ = get_tissue_mask(255 - img_gray)
+    raw_mask = raw_labeled > 0
     gamma_corrected = apply_gamma(img_gray, gamma=gamma)
     clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(clahe_grid, clahe_grid))
     enhanced = clahe.apply(gamma_corrected)
-    _, enhanced_mask = get_tissue_mask(255 - enhanced)
+    enhanced_labeled, _ = get_tissue_mask(255 - enhanced)
+    enhanced_mask = enhanced_labeled > 0
     mask_u8 = np.logical_or(raw_mask, enhanced_mask).astype(np.uint8)
     if close_kernel > 1:
         kernel = np.ones((close_kernel, close_kernel), dtype=np.uint8)
@@ -549,7 +551,8 @@ def save_clahe_output(
     slide = openslide.OpenSlide(str(slide_path))
     thumb = np.array(slide.associated_images["thumbnail"])
     img_gray = cv2.cvtColor(thumb, cv2.COLOR_RGB2GRAY)
-    _, mask = get_tissue_mask(255 - img_gray)
+    labeled, _ = get_tissue_mask(255 - img_gray)
+    mask = labeled > 0
     tissue_only = np.where(mask, img_gray, 0).astype(np.uint8)
     padded, transform = fit_and_pad_2d(tissue_only, (pad, pad), interpolation=cv2.INTER_NEAREST, pad_value=0)
     padded = padded.astype(np.uint8)

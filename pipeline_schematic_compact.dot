@@ -38,10 +38,11 @@ digraph UnifiedHistologyPipelineCompact {
 
     c0 [label="Thumbnail", fillcolor="#eff6ff"];
     c1 [label="Gray + tissue mask", fillcolor="#eff6ff"];
-    c2 [label="Pad + gamma + CLAHE", fillcolor="#eff6ff"];
-    c3 [label="Output\nclahe/<stem>_0000.tif", fillcolor="#d1fae5", color="#047857"];
+    c2 [label="Fit + pad to 1024x1024", fillcolor="#eff6ff"];
+    c3 [label="Gamma + CLAHE", fillcolor="#eff6ff"];
+    c4 [label="Output\nclahe/<stem>_0000.tif", fillcolor="#d1fae5", color="#047857"];
 
-    c0 -> c1 -> c2 -> c3;
+    c0 -> c1 -> c2 -> c3 -> c4;
   }
 
   subgraph cluster_shared {
@@ -50,13 +51,14 @@ digraph UnifiedHistologyPipelineCompact {
     style="rounded";
     fontsize=12;
 
-    t0 [label="Thumbnail tissue mask", fillcolor="#f1f5f9"];
-    t1 [label="Precomputed tile keep grid", fillcolor="#f1f5f9"];
+    t0 [label="Thumbnail tissue mask\nraw OR enhanced", fillcolor="#f1f5f9"];
+    t1 [label="Close + dilate mask", fillcolor="#f1f5f9"];
+    t2a [label="Precomputed tile keep grid\n+ tile-grid dilation", fillcolor="#f1f5f9"];
     t2 [label="large_image tileIterator", fillcolor="#f1f5f9"];
     t3 [label="NumPy tile + metadata", fillcolor="#f1f5f9"];
     split [label="Shared keep/skip gate\nthen per-tile branches", shape=diamond, fillcolor="#e2e8f0"];
 
-    t0 -> t1 -> t2 -> t3 -> split;
+    t0 -> t1 -> t2a -> t2 -> t3 -> split;
   }
 
   subgraph cluster_stain {
@@ -67,10 +69,12 @@ digraph UnifiedHistologyPipelineCompact {
 
     s0 [label="Positive pixel count", fillcolor="#fffbeb"];
     s1 [label="Tile metrics", fillcolor="#fffbeb"];
-    s2 [label="Metric maps", fillcolor="#fffbeb"];
-    s3 [label="Outputs\nstain/*_map.npy\n<stem>_0002.tif", fillcolor="#d1fae5", color="#047857"];
+    s2 [label="Raw maps\nIntensity / Number / % positive", fillcolor="#fffbeb"];
+    s3 [label="Preview from PercentagePositive\nfixed scale 0.00 to 0.02", fillcolor="#fffbeb"];
+    s4 [label="Resize to thumbnail\nfit + pad to 1024x1024", fillcolor="#fffbeb"];
+    s5 [label="Outputs\nstain/IntensitySumPositive_map.npy\nstain/NumberPositive_map.npy\nstain/PercentagePositive_map.npy\nstain/<stem>_0002.tif", fillcolor="#d1fae5", color="#047857"];
 
-    s0 -> s1 -> s2 -> s3;
+    s0 -> s1 -> s2 -> s3 -> s4 -> s5;
   }
 
   subgraph cluster_nuclei {
@@ -84,16 +88,22 @@ digraph UnifiedHistologyPipelineCompact {
     n2 [label="Color deconvolution\nhematoxylin channel", fillcolor="#fdf2f8"];
     n3 [label="Threshold + morphology", fillcolor="#fdf2f8"];
     n4 [label="Connected components\ncount nuclei", fillcolor="#fdf2f8"];
-    n5 [label="Density map + resize", fillcolor="#fdf2f8"];
-    n6 [label="Outputs\nnuclei_density_map.npy\n<stem>_0001.tif\nsample/meta.json", fillcolor="#d1fae5", color="#047857"];
+    n5 [label="Raw density map", fillcolor="#fdf2f8"];
+    n6 [label="Resize preview to thumbnail\nfit + pad to 1024x1024", fillcolor="#fdf2f8"];
+    n7 [label="Outputs\nnuclei/nuclei_density_map.npy\nnuclei/<stem>_0001.tif", fillcolor="#d1fae5", color="#047857"];
 
-    n0 -> n1 -> n2 -> n3 -> n4 -> n5 -> n6;
+    n0 -> n1 -> n2 -> n3 -> n4 -> n5 -> n6 -> n7;
   }
+
+  meta [label="sample/meta.json\nreversible transforms for clahe / stain / nuclei", fillcolor="#dcfce7", color="#15803d"];
 
   select -> c0;
   select -> t0;
   split -> s0;
   split -> n0;
+  c4 -> meta;
+  s5 -> meta;
+  n7 -> meta;
 
   {rank=same; c0; t0}
   {rank=same; s0; n0}
