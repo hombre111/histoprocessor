@@ -11,10 +11,10 @@ By default, `--all` runs all three.
 
 ## Files
 
-- [run_slide.py](/exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide.py): run the pipeline for one slide
-- [run_folder.py](/exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_folder.py): run the pipeline for a whole folder of slides
-- [run_slide_job.sh](/exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide_job.sh): submit one slide to SLURM with `sbatch`
-- [pipeline.py](/exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/pipeline.py): main implementation
+- [run_slide.py](run_slide.py): run the pipeline for one slide
+- [run_folder.py](run_folder.py): run the pipeline for a whole folder of slides
+- [run_slide_job.sh](run_slide_job.sh): submit one slide to SLURM with `sbatch`
+- [pipeline.py](pipeline.py): main implementation
 
 ## Output Layout
 
@@ -91,7 +91,7 @@ flowchart TD
 Input to the pipeline is one WSI file, for example:
 
 ```text
-/exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs
+../../images/00-1006-A-IBA1.svs
 ```
 
 The pipeline can run one or more stages:
@@ -252,10 +252,10 @@ These help answer:
 
 ## Environment
 
-Use:
+From inside this `unified_pipeline/` folder, use:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python
+../../python-venvs/histomics-env/bin/python
 ```
 
 ## Run One Slide
@@ -263,30 +263,30 @@ Use:
 Run everything:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide.py \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+../../python-venvs/histomics-env/bin/python \
+  ./run_slide.py \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   --all
 ```
 
 Run only `stain` and `nuclei`:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide.py \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+../../python-venvs/histomics-env/bin/python \
+  ./run_slide.py \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   --stain --nuclei
 ```
 
 Run only `clahe`:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide.py \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+../../python-venvs/histomics-env/bin/python \
+  ./run_slide.py \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   --clahe
 ```
 
@@ -295,18 +295,18 @@ Run only `clahe`:
 Run everything:
 
 ```bash
-sbatch /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide_job.sh \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+sbatch ./run_slide_job.sh \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   all
 ```
 
 Run only `stain+nuclei`:
 
 ```bash
-sbatch /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide_job.sh \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+sbatch ./run_slide_job.sh \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   stain+nuclei
 ```
 
@@ -322,20 +322,20 @@ Available modes for `run_slide_job.sh`:
 Run the whole `images/` folder:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_folder.py \
-  /exafs1/well/parkkinen/users/nfw313/images \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_batch \
+../../python-venvs/histomics-env/bin/python \
+  ./run_folder.py \
+  ../../images \
+  ../../histoprocessor_outputs/unified_batch \
   --all
 ```
 
 Example with explicit parameters:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_folder.py \
-  /exafs1/well/parkkinen/users/nfw313/images \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_batch \
+../../python-venvs/histomics-env/bin/python \
+  ./run_folder.py \
+  ../../images \
+  ../../histoprocessor_outputs/unified_batch \
   --stain --nuclei \
   --workers 16 \
   --tile-size 512 \
@@ -380,34 +380,34 @@ This helps tell whether the pipeline is CPU-bound or I/O-bound.
 Run one slide locally:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide.py \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+../../python-venvs/histomics-env/bin/python \
+  ./run_slide.py \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   --all
 ```
 
 Run one slide with SLURM:
 
 ```bash
-sbatch /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_slide_job.sh \
-  /exafs1/well/parkkinen/users/nfw313/images/00-1006-A-IBA1.svs \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
+sbatch ./run_slide_job.sh \
+  ../../images/00-1006-A-IBA1.svs \
+  ../../histoprocessor_outputs/unified_test/00-1006-A-IBA1 \
   all
 ```
 
 Run whole folder:
 
 ```bash
-/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python \
-  /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_folder.py \
-  /exafs1/well/parkkinen/users/nfw313/images \
-  /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_batch \
+../../python-venvs/histomics-env/bin/python \
+  ./run_folder.py \
+  ../../images \
+  ../../histoprocessor_outputs/unified_batch \
   --all
 ```
 
 Run whole folder through SLURM:
 
 ```bash
-sbatch --wrap="/exafs1/well/parkkinen/users/nfw313/python-venvs/histomics-env/bin/python /exafs1/well/parkkinen/users/nfw313/final_scripts/unified_pipeline/run_folder.py /exafs1/well/parkkinen/users/nfw313/images /exafs1/well/parkkinen/users/nfw313/histoprocessor_outputs/unified_batch --all"
+sbatch --wrap="../../python-venvs/histomics-env/bin/python ./run_folder.py ../../images ../../histoprocessor_outputs/unified_batch --all"
 ```
